@@ -1,9 +1,6 @@
 -module(s3_test).
 -include_lib("eunit/include/eunit.hrl").
 
--define(BUCKET, "s3erl-test"). %% note: You might have to change this.
-
-
 integration_test_() ->
     {foreach,
      fun setup/0,
@@ -13,7 +10,8 @@ integration_test_() ->
       ?_test(concurrency_limit()),
       ?_test(timeout_retry()),
       ?_test(slow_endpoint()),
-      ?_test(permission_denied())
+      ?_test(permission_denied()),
+      ?_test(list_objects())
      ]}.
 
 setup() ->
@@ -31,16 +29,16 @@ teardown(Pids) ->
 
 
 get_put() ->
-    delete_if_existing(?BUCKET, <<"foo">>),
+    delete_if_existing(bucket(), <<"foo">>),
 
-    ?assertEqual({ok, not_found}, s3:get(?BUCKET, <<"foo">>)),
-    ?assertEqual({ok, not_found}, s3:get(?BUCKET, "foo")),
+    ?assertEqual({ok, not_found}, s3:get(bucket(), <<"foo">>)),
+    ?assertEqual({ok, not_found}, s3:get(bucket(), "foo")),
 
-    ?assertMatch({ok, _}, s3:put(?BUCKET, <<"foo">>, <<"bazbar">>, "text/plain")),
-    ?assertEqual({ok, <<"bazbar">>}, s3:get(?BUCKET, <<"foo">>)),
+    ?assertMatch({ok, _}, s3:put(bucket(), <<"foo">>, <<"bazbar">>, "text/plain")),
+    ?assertEqual({ok, <<"bazbar">>}, s3:get(bucket(), <<"foo">>)),
 
-    ?assertMatch({ok, _}, s3:put(?BUCKET, <<"foo-copy">>, <<>>, "text/plain",
-                                 5000, [{"x-amz-copy-source", ?BUCKET ++ "/foo"}])).
+    ?assertMatch({ok, _}, s3:put(bucket(), <<"foo-copy">>, <<>>, "text/plain",
+                                 5000, [{"x-amz-copy-source", bucket() ++ "/foo"}])).
 
 permission_denied() ->
     ?assertEqual({error, {"AccessDenied", "Access Denied"}},
@@ -61,10 +59,10 @@ concurrency_limit() ->
     meck:expect(s3_lib, get, GetF),
 
 
-    P1 = spawn(fun() -> Parent ! {self(), s3:get(?BUCKET, <<"foo">>)} end),
-    P2 = spawn(fun() -> Parent ! {self(), s3:get(?BUCKET, <<"foo">>)} end),
-    P3 = spawn(fun() -> Parent ! {self(), s3:get(?BUCKET, <<"foo">>)} end),
-    P4 = spawn(fun() -> Parent ! {self(), s3:get(?BUCKET, <<"foo">>)} end),
+    P1 = spawn(fun() -> Parent ! {self(), s3:get(bucket(), <<"foo">>)} end),
+    P2 = spawn(fun() -> Parent ! {self(), s3:get(bucket(), <<"foo">>)} end),
+    P3 = spawn(fun() -> Parent ! {self(), s3:get(bucket(), <<"foo">>)} end),
+    P4 = spawn(fun() -> Parent ! {self(), s3:get(bucket(), <<"foo">>)} end),
 
     receive M0 -> ?assertEqual({max_concurrency, 3}, M0) end,
     receive {P1, M1} -> ?assertEqual({ok, <<"bazbar">>}, M1) end,
@@ -72,7 +70,7 @@ concurrency_limit() ->
     receive {P3, M3} -> ?assertEqual({ok, <<"bazbar">>}, M3) end,
     receive {P4, M4} -> ?assertEqual({error, max_concurrency}, M4) end,
 
-    ?assertEqual({ok, <<"bazbar">>}, s3:get(?BUCKET, <<"foo">>)),
+    ?assertEqual({ok, <<"bazbar">>}, s3:get(bucket(), <<"foo">>)),
     ?assertEqual({ok, [{puts, 0}, {gets, 4}, {deletes, 0}, {num_workers, 0}]},
                  s3_server:get_stats()),
 
@@ -98,7 +96,7 @@ timeout_retry() ->
     %% meck:expect(lhttpc, request, TimeoutF),
     %% meck:expect(lhttpc, request, TimeoutF),
 
-    ?assertEqual({error, timeout}, s3:get(?BUCKET, <<"foo">>)),
+    ?assertEqual({error, timeout}, s3:get(bucket(), <<"foo">>)),
 
     receive M1 -> ?assertEqual({timeout, 0}, M1) end,
     receive M2 -> ?assertEqual({timeout, 1}, M2) end,
@@ -116,7 +114,25 @@ slow_endpoint() ->
                           {endpoint, "localhost:" ++ integer_to_list(Port)},
                           {retry_delay, 10}] ++ default_config()),
 
-    ?assertEqual({error, timeout}, s3:get(?BUCKET, <<"foo">>, 100)).
+    ?assertEqual({error, timeout}, s3:get(bucket(), <<"foo">>, 100)).
+
+list_objects() ->
+    {ok, _} = s3:put(bucket(), "1/1", "foo", "text/plain"),
+    {ok, _} = s3:put(bucket(), "1/2", "foo", "text/plain"),
+    {ok, _} = s3:put(bucket(), "1/3", "foo", "text/plain"),
+    {ok, _} = s3:put(bucket(), "2/1", "foo", "text/plain"),
+
+
+    ?assertEqual({ok, [<<"1/">>, <<"1/1">>, <<"1/2">>, <<"1/3">>]},
+                 s3:list(bucket(), "1/", 10, "")),
+
+    ?assertEqual({ok, [<<"1/3">>]},
+                 s3:list(bucket(), "1/", 3, "1/2")),
+
+    %% List all, includes keys from other tests.
+    ?assertEqual({ok, [<<"1/">>, <<"1/1">>, <<"1/2">>, <<"1/3">>, <<"2/1">>,
+                       <<"foo">>, <<"foo-copy">>]},
+                 s3:list(bucket(), "", 10, "")).
 
 
 %%
@@ -137,7 +153,7 @@ delete_if_existing(Bucket, Key) ->
         {ok, not_found} ->
             ok;
         {ok, _Doc} ->
-            s3:delete(Bucket, Key)
+            {ok, _} = s3:delete(Bucket, Key)
     end.
 
 default_config() ->
@@ -147,3 +163,8 @@ credentials() ->
     File = filename:join([code:priv_dir(s3erl), "s3_credentials.term"]),
     {ok, Cred} = file:consult(File),
     Cred.
+
+bucket() ->
+    File = filename:join([code:priv_dir(s3erl), "bucket.term"]),
+    {ok, Config} = file:consult(File),
+    proplists:get_value(bucket, Config).
