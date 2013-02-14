@@ -11,6 +11,7 @@ integration_test_() ->
       ?_test(timeout_retry()),
       ?_test(slow_endpoint()),
       ?_test(permission_denied()),
+      ?_test(head_object()),
       ?_test(list_objects())
      ]}.
 
@@ -115,6 +116,18 @@ slow_endpoint() ->
                           {retry_delay, 10}] ++ default_config()),
 
     ?assertEqual({error, timeout}, s3:get(bucket(), <<"foo">>, 100)).
+
+head_object() ->
+    delete_if_existing(bucket(), "foo"),
+
+    MetaHeader = {"x-amz-meta-foo", "bar"},
+    {ok, _} = s3:put(bucket(), "foo", "baz", "text/plain", 5000, [MetaHeader]),
+
+    Result = s3:head(bucket(), "foo"),
+    ?assertMatch({ok, _Headers, <<>>}, Result),
+    Headers = element(2, Result),
+    ?assertEqual("bar", proplists:get_value("X-Amz-Meta-Foo", Headers)).
+
 
 list_objects() ->
     {ok, _} = s3:put(bucket(), "1/1", "foo", "text/plain"),

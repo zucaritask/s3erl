@@ -162,12 +162,15 @@ execute_request({put, Bucket, Key, Value, ContentType, Headers}, C) ->
     s3_lib:put(C, Bucket, Key, Value, ContentType, Headers);
 execute_request({delete, Bucket, Key}, C) ->
     s3_lib:delete(C, Bucket, Key);
+execute_request({head, Bucket, Key, Headers}, C) ->
+    s3_lib:head(C, Bucket, Key, Headers);
 execute_request({list, Bucket, Prefix, MaxKeys, Marker}, C) ->
     s3_lib:list(C, Bucket, Prefix, MaxKeys, Marker).
 
 request_method({get, _, _})          -> get;
 request_method({put, _, _, _, _, _}) -> put;
 request_method({delete, _, _})       -> delete;
+request_method({head, _, _, _})      -> head;
 request_method({list, _, _, _, _})   -> get.
 
 
@@ -175,7 +178,8 @@ update_counters(Req, Cs) ->
     case request_method(Req) of
         get    -> Cs#counters{gets = Cs#counters.gets + 1};
         put    -> Cs#counters{puts = Cs#counters.puts + 1};
-        delete -> Cs#counters{deletes = Cs#counters.deletes + 1}
+        delete -> Cs#counters{deletes = Cs#counters.deletes + 1};
+        head   -> Cs %% ignore head requests
     end.
 
 default_max_concurrency_cb(_) -> ok.
