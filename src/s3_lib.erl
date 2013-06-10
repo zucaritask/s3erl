@@ -4,7 +4,7 @@
 -module(s3_lib).
 
 %% API
--export([get/3, put/6, delete/3, list/5]).
+-export([get/3, put/6, delete/3, head/4, list/5]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include("../include/s3.hrl").
@@ -25,6 +25,10 @@ put(Config, Bucket, Key, Value, ContentType, Headers) ->
 
 delete(Config, Bucket, Key) ->
     do_delete(Config, Bucket, Key).
+
+head(Config, Bucket, Key, Headers) ->
+    request(Config, head, Bucket, Key, Headers, <<>>).
+
 
 list(Config, Bucket, Prefix, MaxKeys, Marker) ->
     Key = ["?", "prefix=", Prefix, "&", "max-keys=", MaxKeys, "&marker=", Marker],

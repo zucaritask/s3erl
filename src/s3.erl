@@ -4,6 +4,7 @@
 -export([get/2, get/3]).
 -export([put/4, put/5, put/6]).
 -export([delete/2, delete/3]).
+-export([head/2, head/3, head/4]).
 -export([list/4]).
 -export([stats/0]).
 
@@ -49,6 +50,12 @@ delete(Bucket, Key) ->
 
 delete(Bucket, Key, Timeout) ->
     call({request, {delete, Bucket, Key}}, Timeout).
+
+
+head(Bucket, Key) -> head(Bucket, Key, []).
+head(Bucket, Key, Headers) -> head(Bucket, Key, Headers, 5000).
+head(Bucket, Key, Headers, Timeout) ->
+    call({request, {head, Bucket, Key, Headers}}, Timeout).
 
 list(Bucket, Prefix, MaxKeys, Marker) ->
     call({request, {list, Bucket, Prefix, integer_to_list(MaxKeys), Marker}}, 5000).
