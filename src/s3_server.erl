@@ -179,7 +179,7 @@ update_counters(Req, Cs) ->
         get    -> Cs#counters{gets = Cs#counters.gets + 1};
         put    -> Cs#counters{puts = Cs#counters.puts + 1};
         delete -> Cs#counters{deletes = Cs#counters.deletes + 1};
-        head   -> Cs %% ignore head requests
+        head   -> Cs#counters{gets = Cs#counters.gets + 1}
     end.
 
 default_max_concurrency_cb(_) -> ok.
