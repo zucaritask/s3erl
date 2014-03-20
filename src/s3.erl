@@ -5,7 +5,7 @@
 -export([put/4, put/5, put/6]).
 -export([delete/2, delete/3]).
 -export([head/2, head/3, head/4]).
--export([list/4]).
+-export([list/4, list_details/4]).
 -export([stats/0]).
 
 -type value() :: string() | binary().
@@ -60,6 +60,8 @@ head(Bucket, Key, Headers, Timeout) ->
 list(Bucket, Prefix, MaxKeys, Marker) ->
     call({request, {list, Bucket, Prefix, integer_to_list(MaxKeys), Marker}}, 5000).
 
+list_details(Bucket, Prefix, MaxKeys, Marker) ->
+    call({request, {list_details, Bucket, Prefix, integer_to_list(MaxKeys), Marker}}, 5000).
 
 stats() -> call(get_stats, 5000).
 

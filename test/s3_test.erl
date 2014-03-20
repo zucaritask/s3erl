@@ -12,11 +12,12 @@ integration_test_() ->
       ?_test(slow_endpoint()),
       ?_test(permission_denied()),
       ?_test(head_object()),
-      ?_test(list_objects())
+      ?_test(list_objects()),
+      ?_test(list_objects_with_details())
      ]}.
 
 setup() ->
-    application:start(crypto),
+    application:start(asn1),
     application:start(public_key),
     application:start(ssl),
     application:start(lhttpc),
@@ -136,16 +137,32 @@ list_objects() ->
     {ok, _} = s3:put(bucket(), "2/1", "foo", "text/plain"),
 
 
-    ?assertEqual({ok, [<<"1/">>, <<"1/1">>, <<"1/2">>, <<"1/3">>]},
+    ?assertEqual({ok, [<<"1/1">>, <<"1/2">>, <<"1/3">>]},
                  s3:list(bucket(), "1/", 10, "")),
 
     ?assertEqual({ok, [<<"1/3">>]},
                  s3:list(bucket(), "1/", 3, "1/2")),
 
     %% List all, includes keys from other tests.
-    ?assertEqual({ok, [<<"1/">>, <<"1/1">>, <<"1/2">>, <<"1/3">>, <<"2/1">>,
-                       <<"foo">>, <<"foo-copy">>]},
+    ?assertMatch({ok, [<<"1/1">>, <<"1/2">>, <<"1/3">>, <<"2/1">>, _|_]},
                  s3:list(bucket(), "", 10, "")).
+
+
+list_objects_with_details() ->
+    {ok, _} = s3:put(bucket(), "3/1", "foo", "text/plain"),
+    {ok, _} = s3:put(bucket(), "3/2", "foo", "text/plain"),
+    {ok, _} = s3:put(bucket(), "3/3", "foo", "text/plain"),
+
+
+    ?assertMatch({ok, [ [{key, <<"3/1">>},
+                         {last_modified, _}]
+                      , [{key, <<"3/2">>},
+                         {last_modified, _}]
+                      , [{key, <<"3/3">>},
+                         {last_modified, _}]
+                      ]
+                  },
+                 s3:list_details(bucket(), "3/", 10, "")).
 
 
 %%

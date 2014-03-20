@@ -11,7 +11,7 @@
 -compile(nowarn_deprecated_function).
 
 %% API
--export([get/3, put/6, delete/3, head/4, list/5]).
+-export([get/3, put/6, delete/3, head/4, list/5, list_details/5]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include("../include/s3.hrl").
@@ -37,20 +37,36 @@ head(Config, Bucket, Key, Headers) ->
     request(Config, head, Bucket, Key, Headers, <<>>).
 
 
+%% @doc list only the maching file names
 list(Config, Bucket, Prefix, MaxKeys, Marker) ->
-    Key = ["?", "prefix=", Prefix, "&", "max-keys=", MaxKeys, "&marker=", Marker],
-    case request(Config, get, Bucket, lists:flatten(Key), [], <<>>) of
-        {ok, _Headers, Body} ->
-            {XmlDoc, _Rest} = xmerl_scan:string(binary_to_list(Body)),
+    case do_list(Config, Bucket, Prefix, MaxKeys, Marker) of
+        {ok, XmlDoc} ->
             Keys = lists:map(fun (#xmlText{value = K}) -> list_to_binary(K) end,
                              xmerl_xpath:string(
                                "/ListBucketResult/Contents/Key/text()", XmlDoc)),
 
             {ok, Keys};
-        {ok, not_found} ->
-            {ok, not_found};
-        {error, _} = Error ->
-            Error
+        Else ->
+            Else
+    end.
+
+%% @doc list objects including additional metadata
+list_details(Config, Bucket, Prefix, MaxKeys, Marker) ->
+    case do_list(Config, Bucket, Prefix, MaxKeys, Marker) of
+        {ok, XmlDoc} ->
+            Keys = lists:map(fun (#xmlText{value = K}) -> list_to_binary(K) end,
+                             xmerl_xpath:string(
+                               "/ListBucketResult/Contents/Key/text()", XmlDoc)),
+            LastModifieds = lists:map(fun (#xmlText{value = K}) -> list_to_binary(K) end,
+                             xmerl_xpath:string(
+                               "/ListBucketResult/Contents/LastModified/text()", XmlDoc)),
+            Data = lists:map(fun ({Key, LastModified}) ->
+                                     [{key, Key},
+                                      {last_modified, LastModified}]
+                             end, lists:zip(Keys, LastModifieds)),
+            {ok, Data};
+        Else ->
+            Else
     end.
 
 
@@ -95,7 +111,17 @@ do_get(Config, Bucket, Key) ->
 do_delete(Config, Bucket, Key) ->
     request(Config, delete, Bucket, Key, [], <<>>).
 
-
+do_list(Config, Bucket, Prefix, MaxKeys, Marker) ->
+    Key = ["?", "prefix=", Prefix, "&", "max-keys=", MaxKeys, "&marker=", Marker],
+    case request(Config, get, Bucket, lists:flatten(Key), [], <<>>) of
+        {ok, _Headers, Body} ->
+            {XmlDoc, _Rest} = xmerl_scan:string(binary_to_list(Body)),
+            {ok, XmlDoc};
+        {ok, not_found} ->
+            {ok, not_found};
+        {error, _} = Error ->
+            Error
+    end.
 
 
 %%--------------------------------------------------------------------
@@ -199,4 +225,3 @@ stringToSign(Verb, ContentMD5, Date, Bucket, Path, OriginalHeaders) ->
 
 sign(Key,Data) ->
     base64:encode(crypto:sha_mac(Key, lists:flatten(Data))).
-

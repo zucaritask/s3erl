@@ -165,13 +165,16 @@ execute_request({delete, Bucket, Key}, C) ->
 execute_request({head, Bucket, Key, Headers}, C) ->
     s3_lib:head(C, Bucket, Key, Headers);
 execute_request({list, Bucket, Prefix, MaxKeys, Marker}, C) ->
-    s3_lib:list(C, Bucket, Prefix, MaxKeys, Marker).
+    s3_lib:list(C, Bucket, Prefix, MaxKeys, Marker);
+execute_request({list_details, Bucket, Prefix, MaxKeys, Marker}, C) ->
+    s3_lib:list_details(C, Bucket, Prefix, MaxKeys, Marker).
 
-request_method({get, _, _})          -> get;
-request_method({put, _, _, _, _, _}) -> put;
-request_method({delete, _, _})       -> delete;
-request_method({head, _, _, _})      -> head;
-request_method({list, _, _, _, _})   -> get.
+request_method({get, _, _})                -> get;
+request_method({put, _, _, _, _, _})       -> put;
+request_method({delete, _, _})             -> delete;
+request_method({head, _, _, _})            -> head;
+request_method({list, _, _, _, _})         -> get;
+request_method({list_details, _, _, _, _}) -> get.
 
 
 update_counters(Req, Cs) ->
