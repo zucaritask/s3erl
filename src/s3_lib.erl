@@ -3,6 +3,13 @@
 %%
 -module(s3_lib).
 
+%% Erlang R16B deprecated the *_mac/2 familiy of functions in the crypto module.
+%% In Erlang R15 the new hmac(*,...) functions are not yet available. So to
+%% keep this module compatible with R16 _and_ R15 we silence the deprecation
+%% warning. When R17ff actually removes the old functions, we should start
+%% using the new functions and remove this compile directive again.
+-compile(nowarn_deprecated_function).
+
 %% API
 -export([get/3, put/6, delete/3, head/4, list/5]).
 
