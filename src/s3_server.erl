@@ -8,7 +8,9 @@
 
 %% API
 -export([start_link/1, get_stats/0, stop/0, get_request_cost/0]).
--export([default_max_concurrency_cb/1, default_retry_cb/2]).
+-export([default_max_concurrency_cb/1,
+         default_retry_cb/2,
+         default_post_request_cb/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -55,6 +57,8 @@ init(Config) ->
     MaxConcurrency   = v(max_concurrency, Config, 50),
     MaxConcurrencyCB = v(max_concurrency_callback, Config,
                          fun ?MODULE:default_max_concurrency_cb/1),
+    PostRequestCB    = v(post_request_callback, Config,
+                         fun ?MODULE:default_post_request_cb/3),
     ReturnHeaders    = v(return_headers, Config, false),
 
     C = #config{access_key         = AccessKey,
@@ -66,6 +70,7 @@ init(Config) ->
                 retry_delay        = RetryDelay,
                 max_concurrency    = MaxConcurrency,
                 max_concurrency_cb = MaxConcurrencyCB,
+                post_request_cb    = PostRequestCB,
                 return_headers     = ReturnHeaders},
 
     {ok, #state{config = C, workers = [], counters = #counters{}}}.
@@ -102,7 +107,9 @@ handle_call(stop, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', Pid, normal}, State) ->
+handle_info({'EXIT', Pid, _}, State) ->
+    %% TODO: Keep track of From references in workers list so we can
+    %% reply to our caller
     case lists:member(Pid, State#state.workers) of
         true ->
             NewWorkers = lists:delete(Pid, State#state.workers),
@@ -112,8 +119,8 @@ handle_info({'EXIT', Pid, normal}, State) ->
             {noreply, State}
     end;
 
-handle_info(_Info, State) ->
-    error_logger:info_msg("~p~n", [_Info]),
+handle_info(Info, State) ->
+    error_logger:info_msg("ignored: ~p~n", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -138,26 +145,40 @@ handle_request(Req, C) ->
     handle_request(Req, C, 0).
 
 handle_request(Req, C, Attempts) ->
+    Start = os:timestamp(),
     case catch execute_request(Req, C) of
         %% Continue trying if we have connection related errors
         {error, Reason} when Attempts < C#config.max_retries andalso
                              (Reason =:= connect_timeout orelse
                               Reason =:= timeout) ->
-            (C#config.retry_callback)(Reason, Attempts),
+            catch (C#config.retry_callback)(Reason, Attempts),
             timer:sleep(C#config.retry_delay),
             handle_request(Req, C, Attempts + 1);
+
         {'EXIT', {econnrefused, _}} when Attempts < C#config.max_retries ->
             error_logger:info_msg("exit: ~p~n", [{Req, Attempts}]),
-            (C#config.retry_callback)(econnrefused, Attempts),
+            catch (C#config.retry_callback)(econnrefused, Attempts),
             timer:sleep(C#config.retry_delay),
             handle_request(Req, C, Attempts + 1);
 
-        Response ->
-            Response
+        {error, {"InternalError", _}} ->
+            catch (C#config.retry_callback)(internal_error, Attempts),
+            timer:sleep(C#config.retry_delay),
+            handle_request(Req, C, Attempts + 1);
+
+        {error, {503, "Service Unavailable"}} ->
+            catch (C#config.retry_callback)(internal_error, Attempts),
+            timer:sleep(C#config.retry_delay),
+            handle_request(Req, C, Attempts + 1);
+
+        Res ->
+            End = os:timestamp(),
+            catch (C#config.post_request_cb)(Req, Res, timer:now_diff(End, Start)),
+            Res
     end.
 
-execute_request({get, Bucket, Key}, C) ->
-    s3_lib:get(C, Bucket, Key);
+execute_request({get, Bucket, Key, Headers}, C) ->
+    s3_lib:get(C, Bucket, Key, Headers);
 execute_request({put, Bucket, Key, Value, ContentType, Headers}, C) ->
     s3_lib:put(C, Bucket, Key, Value, ContentType, Headers);
 execute_request({delete, Bucket, Key}, C) ->
@@ -169,7 +190,8 @@ execute_request({list, Bucket, Prefix, MaxKeys, Marker}, C) ->
 execute_request({list_details, Bucket, Prefix, MaxKeys, Marker}, C) ->
     s3_lib:list_details(C, Bucket, Prefix, MaxKeys, Marker).
 
-request_method({get, _, _})                -> get;
+
+request_method({get, _, _, _})             -> get;
 request_method({put, _, _, _, _, _})       -> put;
 request_method({delete, _, _})             -> delete;
 request_method({head, _, _, _})            -> head;
@@ -185,6 +207,6 @@ update_counters(Req, Cs) ->
         head   -> Cs#counters{gets = Cs#counters.gets + 1}
     end.
 
-default_max_concurrency_cb(_) -> ok.
-default_retry_cb(_, _) -> ok.
-
+default_max_concurrency_cb(_)    -> ok.
+default_retry_cb(_, _)           -> ok.
+default_post_request_cb(_, _, _) -> ok.

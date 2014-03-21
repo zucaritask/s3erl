@@ -5,7 +5,8 @@
 -export([put/4, put/5, put/6]).
 -export([delete/2, delete/3]).
 -export([head/2, head/3, head/4]).
--export([list/4, list_details/4]).
+-export([list/4, list/5, list_details/4]).
+-export([fold/4]).
 -export([stats/0]).
 
 -type value() :: string() | binary().
@@ -23,13 +24,23 @@
                  {ok, [ResponseHeaders::header()], Body::value()} |
                  {ok, Body::value()} | term().
 get(Bucket, Key) ->
-    get(Bucket, Key, 5000).
+    get(Bucket, Key, 5000, []).
 
--spec get(Bucket::bucket(), Key::key(), timeout()) ->
+-spec get(Bucket::bucket(), Key::key(), timeout() | [header()]) ->
                  {ok, [ResponseHeaders::header()], Body::value()} |
-                 {ok, Body::value()} | term().
-get(Bucket, Key, Timeout) ->
-    call({request, {get, Bucket, Key}}, Timeout).
+                 {ok, Body::value()} | term() |
+                 {ok, not_modified}.
+get(Bucket, Key, Timeout) when is_integer(Timeout) ->
+    get(Bucket, Key, Timeout, []);
+get(Bucket, Key, Headers) when is_list(Headers) ->
+    get(Bucket, Key, 5000, Headers).
+
+-spec get(Bucket::bucket(), Key::key(), [header()], timeout()) ->
+                 {ok, [ResponseHeaders::header()], Body::value()} |
+                 {ok, Body::value()} | term() |
+                 {ok, not_modified}.
+get(Bucket, Key, Timeout, Headers) ->
+    call({request, {get, Bucket, Key, Headers}}, Timeout).
 
 
 put(Bucket, Key, Value, ContentType) ->
@@ -58,10 +69,37 @@ head(Bucket, Key, Headers, Timeout) ->
     call({request, {head, Bucket, Key, Headers}}, Timeout).
 
 list(Bucket, Prefix, MaxKeys, Marker) ->
-    call({request, {list, Bucket, Prefix, integer_to_list(MaxKeys), Marker}}, 5000).
+    list(Bucket, Prefix, MaxKeys, Marker, 5000).
+
+list(Bucket, Prefix, MaxKeys, Marker, Timeout) ->
+    call({request, {list, Bucket, Prefix, integer_to_list(MaxKeys), Marker}},
+         Timeout).
 
 list_details(Bucket, Prefix, MaxKeys, Marker) ->
     call({request, {list_details, Bucket, Prefix, integer_to_list(MaxKeys), Marker}}, 5000).
+
+
+-spec fold(Bucket::string(), Prefix::string(),
+           FoldFun::fun((Key::string(), Acc::term()) -> NewAcc::term()),
+           InitAcc::term()) -> FinalAcc::term().
+fold(Bucket, Prefix, F, Acc) ->
+    case s3:list(Bucket, Prefix, 100, "") of
+        {ok, Keys} when is_list(Keys) ->
+            do_fold(Bucket, Prefix, F, Keys, Acc);
+        %% we only expect an error on the first call to list.
+        {ok, not_found} -> {error, not_found};
+        {error, Rsn} -> {error, Rsn}
+    end.
+
+do_fold(Bucket, Prefix, F, [Last], Acc) ->
+    NewAcc = F(Last, Acc),
+    %% get next part of the keys from the backup
+    {ok, Keys} = list(Bucket, Prefix, 100, Last),
+    do_fold(Bucket, Prefix, F, Keys, NewAcc);
+do_fold(Bucket, Prefix, F, [H|T], Acc) ->
+    %% this is the normal (recursive) case.
+    do_fold(Bucket, Prefix, F, T, F(H, Acc));
+do_fold(_Bucket, _Prefix, _F, [], Acc) -> Acc. %% done
 
 stats() -> call(get_stats, 5000).
 

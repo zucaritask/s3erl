@@ -3,8 +3,7 @@
 
 integration_test_() ->
     {foreach,
-     fun setup/0,
-     fun teardown/1,
+     fun setup/0, fun teardown/1,
      [
       ?_test(get_put()),
       ?_test(concurrency_limit()),
@@ -12,12 +11,14 @@ integration_test_() ->
       ?_test(slow_endpoint()),
       ?_test(permission_denied()),
       ?_test(head_object()),
+      ?_test(fold()),
       ?_test(list_objects()),
       ?_test(list_objects_with_details())
      ]}.
 
 setup() ->
     application:start(asn1),
+    application:start(crypto),
     application:start(public_key),
     application:start(ssl),
     application:start(lhttpc),
@@ -26,6 +27,7 @@ setup() ->
 
 teardown(Pids) ->
     [begin unlink(P), exit(P, kill) end || P <- Pids].
+
 
 
 
@@ -55,11 +57,8 @@ concurrency_limit() ->
                           {max_concurrency, 3}] ++ default_config()),
 
     meck:new(s3_lib),
-    GetF = fun (_, _, _) -> timer:sleep(50), {ok, <<"bazbar">>} end,
+    GetF = fun (_, _, _, _) -> timer:sleep(50), {ok, <<"bazbar">>} end,
     meck:expect(s3_lib, get, GetF),
-    meck:expect(s3_lib, get, GetF),
-    meck:expect(s3_lib, get, GetF),
-
 
     P1 = spawn(fun() -> Parent ! {self(), s3:get(bucket(), <<"foo">>)} end),
     P2 = spawn(fun() -> Parent ! {self(), s3:get(bucket(), <<"foo">>)} end),
@@ -67,16 +66,17 @@ concurrency_limit() ->
     P4 = spawn(fun() -> Parent ! {self(), s3:get(bucket(), <<"foo">>)} end),
 
     receive M0 -> ?assertEqual({max_concurrency, 3}, M0) end,
-    receive {P1, M1} -> ?assertEqual({ok, <<"bazbar">>}, M1) end,
-    receive {P2, M2} -> ?assertEqual({ok, <<"bazbar">>}, M2) end,
-    receive {P3, M3} -> ?assertEqual({ok, <<"bazbar">>}, M3) end,
-    receive {P4, M4} -> ?assertEqual({error, max_concurrency}, M4) end,
+    ?assertEqual([{error, max_concurrency},
+                  {ok, <<"bazbar">>},
+                  {ok, <<"bazbar">>},
+                  {ok, <<"bazbar">>}],
+                 lists:sort([receive {P, M} -> M  end || P <- [P1,P2,P3,P4]])),
 
     ?assertEqual({ok, <<"bazbar">>}, s3:get(bucket(), <<"foo">>)),
     ?assertEqual({ok, [{puts, 0}, {gets, 4}, {deletes, 0}, {num_workers, 0}]},
                  s3_server:get_stats()),
 
-    meck:validate(s3_lib),
+    ?assert(meck:validate(s3_lib)),
     meck:unload(s3_lib).
 
 timeout_retry() ->
@@ -90,7 +90,7 @@ timeout_retry() ->
                           {retry_delay, 10}] ++ default_config()),
 
     meck:new(lhttpc),
-    TimeoutF = fun (_, _, _, _, _) ->
+    TimeoutF = fun (_, _, _, _, _, _) ->
                        timer:sleep(50),
                        {error, timeout}
                end,
@@ -141,7 +141,7 @@ list_objects() ->
                  s3:list(bucket(), "1/", 10, "")),
 
     ?assertEqual({ok, [<<"1/3">>]},
-                 s3:list(bucket(), "1/", 3, "1/2")),
+                 s3:list(bucket(), "1/", 10, "1/2")),
 
     %% List all, includes keys from other tests.
     ?assertMatch({ok, [<<"1/1">>, <<"1/2">>, <<"1/3">>, <<"2/1">>, _|_]},
@@ -163,6 +163,54 @@ list_objects_with_details() ->
                       ]
                   },
                  s3:list_details(bucket(), "3/", 10, "")).
+
+
+fold() ->
+    %% Depends on earlier tests to setup data.
+    ?assertEqual([<<"1/3">>, <<"1/2">>, <<"1/1">>],
+                 s3:fold(bucket(), "1/", fun(Key, Acc) -> [Key|Acc] end, [])),
+
+     %% List all, includes keys from other tests.
+    ?assertMatch([<<"1/1">>, <<"1/2">>, <<"1/3">>, <<"2/1">>, _|_],
+                 s3:fold(bucket(), "", fun(Key, Acc) -> Acc ++ [Key] end, [])).
+
+
+callback_test() ->
+    application:start(asn1),
+    application:start(crypto),
+    application:start(public_key),
+    application:start(ssl),
+    application:start(lhttpc),
+
+    Parent = self(),
+    F = fun (Request, Response, ElapsedUs) ->
+                Parent ! {Request, Response, ElapsedUs}
+        end,
+
+    {ok, _} = s3_server:start_link([{post_request_callback, F} | credentials()]),
+
+
+    {ok, _} = s3:put(bucket(), "foo", "bar", "text/plain"),
+    {ok, _} = s3:get(bucket(), "foo"),
+
+    receive M1 ->
+            fun () ->
+                    {Request, Response, _ElapsedUs} = M1,
+                    ?assertEqual({put, bucket(), "foo", "bar", "text/plain", []},
+                                 Request),
+                    ?assertMatch({ok, _}, Response)
+            end()
+    end,
+
+    receive M2 ->
+            fun () ->
+                    {Request, Response, _ElapsedUs} = M2,
+                    ?assertEqual({get, bucket(), "foo", []}, Request),
+                    ?assertEqual({ok, <<"bar">>}, Response)
+            end()
+    end,
+
+    s3_server:stop().
 
 
 %%

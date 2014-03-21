@@ -11,7 +11,7 @@
 -compile(nowarn_deprecated_function).
 
 %% API
--export([get/3, put/6, delete/3, head/4, list/5, list_details/5]).
+-export([get/3, get/4, put/6, delete/3, head/4, list/5, list_details/5]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include("../include/s3.hrl").
@@ -20,9 +20,15 @@
 %% API
 %%
 
--spec get(#config{}, bucket(), key()) -> {ok, body()} | {error, any()}.
+-spec get(#config{}, bucket(), key()) ->
+                 {ok, body()} | {error, any()}.
 get(Config, Bucket, Key) ->
-    do_get(Config, Bucket, Key).
+    get(Config, Bucket, Key, []).
+
+-spec get(#config{}, bucket(), key(), [header()]) ->
+                 {ok, body()} | {error, any()}.
+get(Config, Bucket, Key, Headers) ->
+    do_get(Config, Bucket, Key, Headers).
 
 -spec put(#config{}, bucket(), key(), body(), contenttype(), [header()]) ->
                  {ok, etag()} | {error, any()}.
@@ -94,11 +100,11 @@ do_put(Config, Bucket, Key, Value, Headers) ->
             Error
     end.
 
-do_get(Config, Bucket, Key) ->
-    case request(Config, get, Bucket, Key, [], <<>>) of
-        {ok, Headers, Body} ->
+do_get(Config, Bucket, Key, Headers) ->
+    case request(Config, get, Bucket, Key, Headers, <<>>) of
+        {ok, ResponseHeaders, Body} ->
             if Config#config.return_headers ->
-                    {ok, Headers, Body};
+                    {ok, ResponseHeaders, Body};
                true ->
                     {ok, Body}
             end;
@@ -151,14 +157,20 @@ request(Config, Method, Bucket, Path, Headers, Body) ->
                    {"Date", Date},
                    {"Connection", "keep-alive"}
                    | Headers],
+    Options = [{max_connections, Config#config.max_concurrency}],
 
-    case lhttpc:request(Url, Method, FullHeaders,
-                        Body, Config#config.timeout) of
+    do_request(Url, Method, FullHeaders, Body, Config#config.timeout, Options).
+
+do_request(Url, Method, Headers, Body, Timeout, Options) ->
+    case lhttpc:request(Url, Method, Headers, Body, Timeout, Options) of
         {ok, {{200, _}, ResponseHeaders, ResponseBody}} ->
             {ok, ResponseHeaders, ResponseBody};
-        {ok, {{404, "Not Found"}, _, _}} ->
+        {ok, {{204, "No Content" ++ _}, _, _}} ->
             {ok, not_found};
-        {ok, {{204, "No Content"}, _, _}} ->
+        {ok, {{307, "Temporary Redirect" ++ _}, ResponseHeaders, _ResponseBody}} ->
+            {"Location", Location} = lists:keyfind("Location", 1, ResponseHeaders),
+            do_request(Location, Method, Headers, Body, Timeout, Options);
+        {ok, {{404, "Not Found" ++ _}, _, _}} ->
             {ok, not_found};
         {ok, {Code, _ResponseHeaders, <<>>}} ->
             {error, Code};
