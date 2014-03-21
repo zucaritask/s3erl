@@ -7,7 +7,15 @@
 -include("../include/s3.hrl").
 
 %% API
--export([start_link/1, get_stats/0, stop/0, get_request_cost/0]).
+-export([start_link/1,
+         start_link/2,
+         get_stats/0,
+         get_stats/1,
+         stop/0,
+         stop/1,
+         get_request_cost/0,
+         get_request_cost/1]).
+
 -export([default_max_concurrency_cb/1,
          default_retry_cb/2,
          default_post_request_cb/3]).
@@ -24,19 +32,30 @@
 %%
 
 start_link(Config) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
+    start_link({local, ?MODULE}, Config).
+start_link(unnamed, Config) ->
+    gen_server:start_link(?MODULE, Config, []);
+start_link(ServerName, Config) ->
+    gen_server:start_link(ServerName, ?MODULE, Config, []).
 
 get_stats() ->
-    gen_server:call(?MODULE, get_stats).
+    get_stats(?MODULE).
+get_stats(Pid) ->
+    gen_server:call(Pid, get_stats).
 
 get_request_cost() ->
-    {ok, Stats} = get_stats(),
+    get_request_cost(?MODULE).
+get_request_cost(Pid) ->
+    {ok, Stats} = get_stats(Pid),
     GetCost = proplists:get_value(gets, Stats) / 1000000,
     PutCost = proplists:get_value(gets, Stats) / 100000,
     [{gets, GetCost}, {puts, PutCost}, {total, GetCost + PutCost}].
 
 stop() ->
-    gen_server:call(?MODULE, stop).
+    stop(?MODULE).
+stop(Pid) ->
+    gen_server:call(Pid, stop).
+
 
 %%====================================================================
 %% gen_server callbacks
