@@ -157,19 +157,18 @@ request(Config, Method, Bucket, Path, Headers, Body) ->
                    {"Date", Date},
                    {"Connection", "keep-alive"}
                    | Headers],
-    Options = [{max_connections, Config#config.max_concurrency}],
 
-    do_request(Url, Method, FullHeaders, Body, Config#config.timeout, Options).
+    do_request(Url, Method, FullHeaders, Body, Config#config.timeout).
 
-do_request(Url, Method, Headers, Body, Timeout, Options) ->
-    case lhttpc:request(Url, Method, Headers, Body, Timeout, Options) of
+do_request(Url, Method, Headers, Body, Timeout) ->
+    case lhttpc:request(Url, Method, Headers, Body, Timeout) of
         {ok, {{200, _}, ResponseHeaders, ResponseBody}} ->
             {ok, ResponseHeaders, ResponseBody};
         {ok, {{204, "No Content" ++ _}, _, _}} ->
             {ok, not_found};
         {ok, {{307, "Temporary Redirect" ++ _}, ResponseHeaders, _ResponseBody}} ->
             {"Location", Location} = lists:keyfind("Location", 1, ResponseHeaders),
-            do_request(Location, Method, Headers, Body, Timeout, Options);
+            do_request(Location, Method, Headers, Body, Timeout);
         {ok, {{404, "Not Found" ++ _}, _, _}} ->
             {ok, not_found};
         {ok, {Code, _ResponseHeaders, <<>>}} ->

@@ -90,7 +90,7 @@ timeout_retry() ->
                           {retry_delay, 10}] ++ default_config()),
 
     meck:new(lhttpc),
-    TimeoutF = fun (_, _, _, _, _, _) ->
+    TimeoutF = fun (_, _, _, _, _) ->
                        timer:sleep(50),
                        {error, timeout}
                end,
