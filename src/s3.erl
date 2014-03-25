@@ -9,6 +9,15 @@
 -export([fold/4]).
 -export([stats/0]).
 
+%% alternative API with explicit Pid for s3_server
+-export([pget/3, pget/4]).
+-export([pput/5, pput/6, pput/7]).
+-export([pdelete/3, pdelete/4]).
+-export([phead/3, phead/4, phead/5]).
+-export([plist/5, plist/6, plist_details/5, plist_details/6]).
+-export([pfold/5]).
+-export([pstats/1]).
+
 -type value() :: string() | binary().
 -export_type([value/0]).
 
@@ -40,7 +49,7 @@ get(Bucket, Key, Headers) when is_list(Headers) ->
                  {ok, Body::value()} | term() |
                  {ok, not_modified}.
 get(Bucket, Key, Timeout, Headers) ->
-    call({request, {get, Bucket, Key, Headers}}, Timeout).
+    pget(s3_server, Bucket, Key, Timeout, Headers).
 
 
 put(Bucket, Key, Value, ContentType) ->
@@ -53,58 +62,140 @@ put(Bucket, Key, Value, ContentType, Timeout) ->
           ContentType::string(), timeout(), list(header())) ->
                  {ok, Etag::any()} | ok | any().
 put(Bucket, Key, Value, ContentType, Timeout, Headers) ->
-    call({request, {put, Bucket, Key, Value, ContentType, Headers}}, Timeout).
+    pput(s3_server, Bucket, Key, Value, ContentType, Timeout, Headers).
 
 
 delete(Bucket, Key) ->
     delete(Bucket, Key, 5000).
 
 delete(Bucket, Key, Timeout) ->
-    call({request, {delete, Bucket, Key}}, Timeout).
+    pdelete(s3_server, Bucket, Key, Timeout).
 
 
 head(Bucket, Key) -> head(Bucket, Key, []).
 head(Bucket, Key, Headers) -> head(Bucket, Key, Headers, 5000).
 head(Bucket, Key, Headers, Timeout) ->
-    call({request, {head, Bucket, Key, Headers}}, Timeout).
+    phead(s3_server, Bucket, Key, Headers, Timeout).
 
 list(Bucket, Prefix, MaxKeys, Marker) ->
     list(Bucket, Prefix, MaxKeys, Marker, 5000).
 
 list(Bucket, Prefix, MaxKeys, Marker, Timeout) ->
-    call({request, {list, Bucket, Prefix, integer_to_list(MaxKeys), Marker}},
-         Timeout).
+    plist(s3_server, Bucket, Prefix, MaxKeys, Marker, Timeout).
+
 
 list_details(Bucket, Prefix, MaxKeys, Marker) ->
     list_details(Bucket, Prefix, MaxKeys, Marker, 5000).
 
 list_details(Bucket, Prefix, MaxKeys, Marker, Timeout) ->
-    call({request, {list_details, Bucket, Prefix, integer_to_list(MaxKeys), Marker}}, Timeout).
+    plist_details(s3_server, Bucket, Prefix, MaxKeys, Marker, Timeout).
 
 
 -spec fold(Bucket::string(), Prefix::string(),
            FoldFun::fun((Key::string(), Acc::term()) -> NewAcc::term()),
            InitAcc::term()) -> FinalAcc::term().
 fold(Bucket, Prefix, F, Acc) ->
-    case s3:list(Bucket, Prefix, 100, "") of
+    pfold(s3_server, Bucket, Prefix, F, Acc).
+
+
+stats() -> pstats(s3_server).
+
+
+%%
+%% API with explicit Pid for s3_server
+%%
+
+-spec pget(Pid::pid(), Bucket::bucket(), Key::key()) ->
+                 {ok, [ResponseHeaders::header()], Body::value()} |
+                 {ok, Body::value()} | term().
+pget(Pid, Bucket, Key) ->
+    pget(Pid, Bucket, Key, 5000, []).
+
+-spec pget(Pid::pid(), Bucket::bucket(), Key::key(), timeout() | [header()]) ->
+                 {ok, [ResponseHeaders::header()], Body::value()} |
+                 {ok, Body::value()} | term() |
+                 {ok, not_modified}.
+pget(Pid, Bucket, Key, Timeout) when is_integer(Timeout) ->
+    pget(Pid, Bucket, Key, Timeout, []);
+pget(Pid, Bucket, Key, Headers) when is_list(Headers) ->
+    pget(Pid, Bucket, Key, 5000, Headers).
+
+-spec pget(Pid::pid(), Bucket::bucket(), Key::key(), [header()], timeout()) ->
+                 {ok, [ResponseHeaders::header()], Body::value()} |
+                 {ok, Body::value()} | term() |
+                 {ok, not_modified}.
+pget(Pid, Bucket, Key, Timeout, Headers) ->
+    call(Pid, {request, {get, Bucket, Key, Headers}}, Timeout).
+
+
+pput(Pid, Bucket, Key, Value, ContentType) ->
+    pput(Pid, Bucket, Key, Value, ContentType, 5000).
+
+pput(Pid, Bucket, Key, Value, ContentType, Timeout) ->
+    pput(Pid, Bucket, Key, Value, ContentType, Timeout, []).
+
+-spec pput(Pid::pid(), Bucket::bucket(), Key::key(), Value::value(),
+          ContentType::string(), timeout(), list(header())) ->
+                 {ok, Etag::any()} | ok | any().
+pput(Pid, Bucket, Key, Value, ContentType, Timeout, Headers) ->
+    call(Pid, {request, {put, Bucket, Key, Value, ContentType, Headers}}, Timeout).
+
+
+pdelete(Pid, Bucket, Key) ->
+    pdelete(Pid, Bucket, Key, 5000).
+
+pdelete(Pid, Bucket, Key, Timeout) ->
+    call(Pid, {request, {delete, Bucket, Key}}, Timeout).
+
+
+phead(Pid, Bucket, Key) -> phead(Pid, Bucket, Key, []).
+phead(Pid, Bucket, Key, Headers) -> phead(Pid, Bucket, Key, Headers, 5000).
+phead(Pid, Bucket, Key, Headers, Timeout) ->
+    call(Pid, {request, {head, Bucket, Key, Headers}}, Timeout).
+
+plist(Pid, Bucket, Prefix, MaxKeys, Marker) ->
+    plist(Pid, Bucket, Prefix, MaxKeys, Marker, 5000).
+
+plist(Pid, Bucket, Prefix, MaxKeys, Marker, Timeout) ->
+    call(Pid, {request, {list, Bucket, Prefix, integer_to_list(MaxKeys), Marker}},
+         Timeout).
+
+plist_details(Pid, Bucket, Prefix, MaxKeys, Marker) ->
+    plist_details(Pid, Bucket, Prefix, MaxKeys, Marker, 5000).
+
+plist_details(Pid, Bucket, Prefix, MaxKeys, Marker, Timeout) ->
+    call(Pid, {request, {list_details, Bucket, Prefix, integer_to_list(MaxKeys), Marker}}, Timeout).
+
+
+-spec pfold(Pid::pid(), Bucket::string(), Prefix::string(),
+           FoldFun::fun((Key::string(), Acc::term()) -> NewAcc::term()),
+           InitAcc::term()) -> FinalAcc::term().
+pfold(Pid, Bucket, Prefix, F, Acc) ->
+    case s3:plist(Pid, Bucket, Prefix, 100, "") of
         {ok, Keys} when is_list(Keys) ->
-            do_fold(Bucket, Prefix, F, Keys, Acc);
+            do_fold(Pid, Bucket, Prefix, F, Keys, Acc);
         %% we only expect an error on the first call to list.
         {ok, not_found} -> {error, not_found};
         {error, Rsn} -> {error, Rsn}
     end.
 
-do_fold(Bucket, Prefix, F, [Last], Acc) ->
+pstats(Pid) -> call(Pid, get_stats, 5000).
+
+
+%%
+%% Internal Helpers
+%%
+
+do_fold(Pid, Bucket, Prefix, F, [Last], Acc) ->
     NewAcc = F(Last, Acc),
     %% get next part of the keys from the backup
-    {ok, Keys} = list(Bucket, Prefix, 100, Last),
-    do_fold(Bucket, Prefix, F, Keys, NewAcc);
-do_fold(Bucket, Prefix, F, [H|T], Acc) ->
+    {ok, Keys} = plist(Pid, Bucket, Prefix, 100, Last),
+    do_fold(Pid, Bucket, Prefix, F, Keys, NewAcc);
+do_fold(Pid, Bucket, Prefix, F, [H|T], Acc) ->
     %% this is the normal (recursive) case.
-    do_fold(Bucket, Prefix, F, T, F(H, Acc));
-do_fold(_Bucket, _Prefix, _F, [], Acc) -> Acc. %% done
+    do_fold(Pid, Bucket, Prefix, F, T, F(H, Acc));
+do_fold(_Pid, _Bucket, _Prefix, _F, [], Acc) -> Acc. %% done
 
-stats() -> call(get_stats, 5000).
 
-call(Request, Timeout) ->
-    gen_server:call(s3_server, Request, Timeout).
+call(Pid, Request, Timeout) ->
+    gen_server:call(Pid, Request, Timeout).
