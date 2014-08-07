@@ -1,9 +1,10 @@
--type bucket()      :: string().
--type key()         :: string().
--type contenttype() :: string().
--type body()        :: binary().
--type etag()        :: string().
--type header()      :: {string(), string()}.
+-type bucket()        :: string().
+-type key()           :: string().
+-type contenttype()   :: string().
+-type body()          :: binary().
+-type etag()          :: string().
+-type header()        :: {string(), string()}.
+-type lhttp_options() :: [{atom(), term()} | {atom(), term(), term()}].
 
 -record(config, {
           access_key,

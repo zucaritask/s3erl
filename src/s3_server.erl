@@ -224,8 +224,8 @@ handle_request(Req, C, Attempts) ->
             Res
     end.
 
-execute_request({get, Bucket, Key, Headers}, C) ->
-    s3_lib:get(C, Bucket, Key, Headers);
+execute_request({get, Bucket, Key, Headers, Options}, C) ->
+    s3_lib:get(C, Bucket, Key, Headers, Options);
 execute_request({put, Bucket, Key, Value, ContentType, Headers}, C) ->
     s3_lib:put(C, Bucket, Key, Value, ContentType, Headers);
 execute_request({delete, Bucket, Key}, C) ->
@@ -242,7 +242,7 @@ execute_request({signed_url, Bucket, Key, Method, Expires}, C) ->
     s3_lib:signed_url(C, Bucket, Key, Method, Expires).
 
 
-request_method({get, _, _, _})             -> get;
+request_method({get, _, _, _, _})          -> get;
 request_method({put, _, _, _, _, _})       -> put;
 request_method({delete, _, _})             -> delete;
 request_method({head, _, _, _})            -> head;

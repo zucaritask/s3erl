@@ -11,7 +11,7 @@
 -compile(nowarn_deprecated_function).
 
 %% API
--export([get/3, get/4, put/6, delete/3, head/4, list/5, list_details/5]).
+-export([get/3, get/4, get/5, put/6, delete/3, head/4, list/5, list_details/5]).
 -export([signed_url/4, signed_url/5]).
 
 -include_lib("xmerl/include/xmerl.hrl").
@@ -24,12 +24,17 @@
 -spec get(#config{}, bucket(), key()) ->
                  {ok, body()} | {error, any()}.
 get(Config, Bucket, Key) ->
-    get(Config, Bucket, Key, []).
+    get(Config, Bucket, Key, [], []).
 
 -spec get(#config{}, bucket(), key(), [header()]) ->
                  {ok, body()} | {error, any()}.
 get(Config, Bucket, Key, Headers) ->
-    do_get(Config, Bucket, Key, Headers).
+    get(Config, Bucket, Key, Headers, []).
+
+-spec get(#config{}, bucket(), key(), [header()], lhttp_options()) ->
+                 {ok, body()} | {error, any()}.
+get(Config, Bucket, Key, Headers, Options) ->
+    do_get(Config, Bucket, Key, Headers, Options).
 
 -spec put(#config{}, bucket(), key(), body(), contenttype(), [header()]) ->
                  {ok, etag()} | {error, any()}.
@@ -114,8 +119,8 @@ do_put(Config, Bucket, Key, Value, Headers) ->
             Error
     end.
 
-do_get(Config, Bucket, Key, Headers) ->
-    case request(Config, get, Bucket, Key, Headers, <<>>) of
+do_get(Config, Bucket, Key, Headers, Options) ->
+    case request(Config, get, Bucket, Key, Headers, Options, <<>>) of
         {ok, ResponseHeaders, Body} ->
             if Config#config.return_headers ->
                     {ok, ResponseHeaders, Body};
@@ -165,6 +170,9 @@ build_full_url(Endpoint, Bucket, Path) ->
     lists:flatten(["http://", build_host(Endpoint, Bucket), "/", Path]).
 
 request(Config, Method, Bucket, Path, Headers, Body) ->
+    request(Config, Method, Bucket, Path, Headers, [], Body).
+
+request(Config, Method, Bucket, Path, Headers, Options, Body) ->
     Date = httpd_util:rfc1123_date(),
     Url = build_url(Config#config.endpoint, Bucket, Path),
 
@@ -179,23 +187,27 @@ request(Config, Method, Bucket, Path, Headers, Body) ->
                    {"Connection", "keep-alive"}
                    | Headers],
 
-    do_request(Url, Method, FullHeaders, Body, Config#config.timeout).
+    do_request(Url, Method, FullHeaders, Body, Config#config.timeout, Options).
 
-do_request(Url, Method, Headers, Body, Timeout) ->
-    case lhttpc:request(Url, Method, Headers, Body, Timeout) of
+do_request(Url, Method, Headers, Body, Timeout, Options) ->
+    case lhttpc:request(Url, Method, Headers, Body, Timeout, Options) of
         {ok, {{200, _}, ResponseHeaders, ResponseBody}} ->
             {ok, ResponseHeaders, ResponseBody};
         {ok, {{204, "No Content" ++ _}, _, _}} ->
             {ok, not_found};
         {ok, {{307, "Temporary Redirect" ++ _}, ResponseHeaders, _ResponseBody}} ->
             {"Location", Location} = lists:keyfind("Location", 1, ResponseHeaders),
-            do_request(Location, Method, Headers, Body, Timeout);
+            do_request(Location, Method, Headers, Body, Timeout, Options);
         {ok, {{404, "Not Found" ++ _}, _, _}} ->
             {ok, not_found};
         {ok, {Code, _ResponseHeaders, <<>>}} ->
             {error, Code};
         {ok, {_Code, _ResponseHeaders, ResponseBody}} ->
             {error, parseErrorXml(ResponseBody)};
+        {ok, ResponseHeaders, Pid} when is_pid(Pid) ->
+            {ok, ResponseHeaders, Pid};
+        {_Ref, Pid} when is_pid(Pid) ->
+            {ok, Pid};
         {error, Reason} ->
             {error, Reason}
     end.

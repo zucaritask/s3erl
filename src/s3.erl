@@ -2,6 +2,7 @@
 -module(s3).
 
 -export([get/2, get/3]).
+-export([start_stream_get/6, read_stream_response/2, read_stream_body/2]).
 -export([put/4, put/5, put/6]).
 -export([delete/2, delete/3]).
 -export([head/2, head/3, head/4]).
@@ -19,41 +20,59 @@
 -export([pfold/5]).
 -export([pstats/1]).
 
+-include("../include/s3.hrl").
+
+-export_type([bucket/0]).
+-export_type([key/0]).
+
 -type value() :: string() | binary().
 -export_type([value/0]).
 
--type header() :: {string(), string()}.
-
--type bucket() :: string().
--export_type([bucket/0]).
-
 -type expire() :: pos_integer().
 -export_type([expire/0]).
-
--type key() :: string().
--export_type([key/0]).
 
 -spec get(Bucket::bucket(), Key::key()) ->
                  {ok, [ResponseHeaders::header()], Body::value()} |
                  {ok, Body::value()} | term().
 get(Bucket, Key) ->
-    get(Bucket, Key, 5000, []).
+    get(Bucket, Key, 5000, [], []).
 
 -spec get(Bucket::bucket(), Key::key(), timeout() | [header()]) ->
                  {ok, [ResponseHeaders::header()], Body::value()} |
                  {ok, Body::value()} | term() |
                  {ok, not_modified}.
 get(Bucket, Key, Timeout) when is_integer(Timeout) ->
-    get(Bucket, Key, Timeout, []);
+    get(Bucket, Key, Timeout, [], []);
 get(Bucket, Key, Headers) when is_list(Headers) ->
-    get(Bucket, Key, 5000, Headers).
+    get(Bucket, Key, 5000, Headers, []).
 
--spec get(Bucket::bucket(), Key::key(), [header()], timeout()) ->
+-spec get(Bucket::bucket(), Key::key(), [header()], timeout(), lhttp_options()) ->
                  {ok, [ResponseHeaders::header()], Body::value()} |
                  {ok, Body::value()} | term() |
                  {ok, not_modified}.
-get(Bucket, Key, Timeout, Headers) ->
-    pget(s3_server, Bucket, Key, Timeout, Headers).
+get(Bucket, Key, Timeout, Headers, Options) ->
+    pget(s3_server, Bucket, Key, Timeout, Headers, Options).
+
+
+start_stream_get(Bucket, Key, Timeout, Headers, WindowSize, PartSize) ->
+    {ok, Pid} = get(Bucket, Key, Timeout, Headers, [{stream_to, self()},
+                                                    {partial_download,
+                                                     [{window_size, WindowSize},
+                                                      {part_size, PartSize}]}]),
+    Pid.
+
+read_stream_response(Pid, Timeout) ->
+    receive
+        {response, _ReqId, Pid, {ok, {Status, Hdrs, Pid}}} ->
+            {ok, Status, Hdrs};
+        {response, _ReqId, Pid, R} ->
+            R
+    after Timeout ->
+        {error, timeout}
+    end.
+
+read_stream_body(Pid, Timeout) ->
+    lhttpc:get_body_part(Pid, Timeout).
 
 
 put(Bucket, Key, Value, ContentType) ->
@@ -128,23 +147,24 @@ signed_url(Bucket, Key, Expires, Method, Timeout) ->
                  {ok, [ResponseHeaders::header()], Body::value()} |
                  {ok, Body::value()} | term().
 pget(Pid, Bucket, Key) ->
-    pget(Pid, Bucket, Key, 5000, []).
+    pget(Pid, Bucket, Key, 5000, [], []).
 
 -spec pget(Pid::pid(), Bucket::bucket(), Key::key(), timeout() | [header()]) ->
                  {ok, [ResponseHeaders::header()], Body::value()} |
                  {ok, Body::value()} | term() |
                  {ok, not_modified}.
 pget(Pid, Bucket, Key, Timeout) when is_integer(Timeout) ->
-    pget(Pid, Bucket, Key, Timeout, []);
+    pget(Pid, Bucket, Key, Timeout, [], []);
 pget(Pid, Bucket, Key, Headers) when is_list(Headers) ->
-    pget(Pid, Bucket, Key, 5000, Headers).
+    pget(Pid, Bucket, Key, 5000, Headers, []).
 
--spec pget(Pid::pid(), Bucket::bucket(), Key::key(), [header()], timeout()) ->
+-spec pget(Pid::pid(), Bucket::bucket(), Key::key(), [header()], timeout(),
+          lhttp_options()) ->
                  {ok, [ResponseHeaders::header()], Body::value()} |
                  {ok, Body::value()} | term() |
                  {ok, not_modified}.
-pget(Pid, Bucket, Key, Timeout, Headers) ->
-    call(Pid, {request, {get, Bucket, Key, Headers}}, Timeout).
+pget(Pid, Bucket, Key, Timeout, Headers, Options) ->
+    call(Pid, {request, {get, Bucket, Key, Headers, Options}}, Timeout).
 
 
 pput(Pid, Bucket, Key, Value, ContentType) ->
