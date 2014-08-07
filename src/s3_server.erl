@@ -6,9 +6,12 @@
 
 -include("../include/s3.hrl").
 
+
 %% API
 -export([start_link/1,
          start_link/2,
+         reload_config/1,
+         get_config/0,
          get_stats/0,
          get_stats/1,
          stop/0,
@@ -20,12 +23,14 @@
          default_retry_cb/2,
          default_post_request_cb/3]).
 
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 -record(counters, {puts = 0, gets = 0, deletes = 0}).
 -record(state, {config, workers, counters}).
+
 
 %%
 %% API
@@ -37,6 +42,9 @@ start_link(unnamed, Config) ->
     gen_server:start_link(?MODULE, Config, []);
 start_link(ServerName, Config) ->
     gen_server:start_link(ServerName, ?MODULE, Config, []).
+
+reload_config(Config) ->
+    gen_server:call(?MODULE, {reload_config, Config}).
 
 get_stats() ->
     get_stats(?MODULE).
@@ -57,6 +65,10 @@ stop(Pid) ->
     gen_server:call(Pid, stop).
 
 
+get_config() ->
+    gen_server:call(?MODULE, get_config).
+
+
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
@@ -64,35 +76,8 @@ stop(Pid) ->
 init(Config) ->
     process_flag(trap_exit, true),
 
-    AccessKey        = v(access_key, Config),
-    SecretAccessKey  = v(secret_access_key, Config),
-    Endpoint         = v(endpoint, Config),
-
-    Timeout          = v(timeout, Config, 1500),
-    RetryCallback    = v(retry_callback, Config,
-                         fun ?MODULE:default_retry_cb/2),
-    MaxRetries       = v(max_retries, Config, 3),
-    RetryDelay       = v(retry_delay, Config, 500),
-    MaxConcurrency   = v(max_concurrency, Config, 50),
-    MaxConcurrencyCB = v(max_concurrency_callback, Config,
-                         fun ?MODULE:default_max_concurrency_cb/1),
-    PostRequestCB    = v(post_request_callback, Config,
-                         fun ?MODULE:default_post_request_cb/3),
-    ReturnHeaders    = v(return_headers, Config, false),
-
-    C = #config{access_key         = AccessKey,
-                secret_access_key  = SecretAccessKey,
-                endpoint           = Endpoint,
-                timeout            = Timeout,
-                retry_callback     = RetryCallback,
-                max_retries        = MaxRetries,
-                retry_delay        = RetryDelay,
-                max_concurrency    = MaxConcurrency,
-                max_concurrency_cb = MaxConcurrencyCB,
-                post_request_cb    = PostRequestCB,
-                return_headers     = ReturnHeaders},
-
-    {ok, #state{config = C, workers = [], counters = #counters{}}}.
+    {ok, #state{config = create_config(Config), workers = [],
+                counters = #counters{}}}.
 
 handle_call({request, Req}, From, #state{config = C} = State)
   when length(State#state.workers) < C#config.max_concurrency ->
@@ -119,8 +104,14 @@ handle_call(get_stats, _From, #state{workers = Workers, counters = C} = State) -
              {num_workers, length(Workers)}],
     {reply, {ok, Stats}, State};
 
+handle_call({reload_config, Config}, _From, State) ->
+    {reply, ok, State#state{config = create_config(Config)}};
+
 handle_call(stop, _From, State) ->
-    {stop, normal, ok, State}.
+    {stop, normal, ok, State};
+
+handle_call(get_config, _From, #state{config = C} = State) ->
+    {reply, {ok, C}, State}.
 
 
 handle_cast(_Msg, State) ->
@@ -159,6 +150,35 @@ v(Key, Data) ->
 v(Key, Data, Default) ->
     proplists:get_value(Key, Data, Default).
 
+create_config(Config) ->
+    AccessKey        = v(access_key, Config),
+    SecretAccessKey  = v(secret_access_key, Config),
+    Endpoint         = v(endpoint, Config),
+
+    Timeout          = v(timeout, Config, 1500),
+    RetryCallback    = v(retry_callback, Config,
+                         fun ?MODULE:default_retry_cb/2),
+    MaxRetries       = v(max_retries, Config, 3),
+    RetryDelay       = v(retry_delay, Config, 500),
+    MaxConcurrency   = v(max_concurrency, Config, 50),
+    MaxConcurrencyCB = v(max_concurrency_callback, Config,
+                         fun ?MODULE:default_max_concurrency_cb/1),
+    PostRequestCB    = v(post_request_callback, Config,
+                         fun ?MODULE:default_post_request_cb/3),
+    ReturnHeaders    = v(return_headers, Config, false),
+
+    #config{access_key         = AccessKey,
+            secret_access_key  = SecretAccessKey,
+            endpoint           = Endpoint,
+            timeout            = Timeout,
+            retry_callback     = RetryCallback,
+            max_retries        = MaxRetries,
+            retry_delay        = RetryDelay,
+            max_concurrency    = MaxConcurrency,
+            max_concurrency_cb = MaxConcurrencyCB,
+            post_request_cb    = PostRequestCB,
+            return_headers     = ReturnHeaders}.
+
 %% @doc: Executes the given request, will retry if request failed
 handle_request(Req, C) ->
     handle_request(Req, C, 0).
@@ -175,20 +195,28 @@ handle_request(Req, C, Attempts) ->
             handle_request(Req, C, Attempts + 1);
 
         {'EXIT', {econnrefused, _}} when Attempts < C#config.max_retries ->
-            error_logger:info_msg("exit: ~p~n", [{Req, Attempts}]),
             catch (C#config.retry_callback)(econnrefused, Attempts),
             timer:sleep(C#config.retry_delay),
             handle_request(Req, C, Attempts + 1);
 
-        {error, {"InternalError", _}} ->
-            catch (C#config.retry_callback)(internal_error, Attempts),
-            timer:sleep(C#config.retry_delay),
-            handle_request(Req, C, Attempts + 1);
-
-        {error, {503, "Service Unavailable"}} ->
-            catch (C#config.retry_callback)(internal_error, Attempts),
-            timer:sleep(C#config.retry_delay),
-            handle_request(Req, C, Attempts + 1);
+        {error, Error} when Attempts < C#config.max_retries ->
+            Retry = case Error of
+                        {"InternalError", _} -> true;
+                        {503, "Service Unavailable"} -> true;
+                        {"SlowDown", _} -> true;
+                        _ -> false
+                    end,
+            case Retry of
+                true ->
+                    catch (C#config.retry_callback)(internal_error, Attempts),
+                    timer:sleep(C#config.retry_delay),
+                    handle_request(Req, C, Attempts + 1);
+                false ->
+                    End = os:timestamp(),
+                    catch (C#config.post_request_cb)(Req, {error, Error},
+                                                     timer:now_diff(End, Start)),
+                    {error, Error}
+            end;
 
         Res ->
             End = os:timestamp(),
@@ -207,7 +235,11 @@ execute_request({head, Bucket, Key, Headers}, C) ->
 execute_request({list, Bucket, Prefix, MaxKeys, Marker}, C) ->
     s3_lib:list(C, Bucket, Prefix, MaxKeys, Marker);
 execute_request({list_details, Bucket, Prefix, MaxKeys, Marker}, C) ->
-    s3_lib:list_details(C, Bucket, Prefix, MaxKeys, Marker).
+    s3_lib:list_details(C, Bucket, Prefix, MaxKeys, Marker);
+execute_request({signed_url, Bucket, Key, Expires}, C) ->
+    s3_lib:signed_url(C, Bucket, Key, Expires);
+execute_request({signed_url, Bucket, Key, Method, Expires}, C) ->
+    s3_lib:signed_url(C, Bucket, Key, Method, Expires).
 
 
 request_method({get, _, _, _})             -> get;
@@ -215,7 +247,8 @@ request_method({put, _, _, _, _, _})       -> put;
 request_method({delete, _, _})             -> delete;
 request_method({head, _, _, _})            -> head;
 request_method({list, _, _, _, _})         -> get;
-request_method({list_details, _, _, _, _}) -> get.
+request_method({list_details, _, _, _, _}) -> get;
+request_method({signed_url, _, _, _})      -> ignore.
 
 
 update_counters(Req, Cs) ->
@@ -223,7 +256,8 @@ update_counters(Req, Cs) ->
         get    -> Cs#counters{gets = Cs#counters.gets + 1};
         put    -> Cs#counters{puts = Cs#counters.puts + 1};
         delete -> Cs#counters{deletes = Cs#counters.deletes + 1};
-        head   -> Cs#counters{gets = Cs#counters.gets + 1}
+        head   -> Cs#counters{gets = Cs#counters.gets + 1};
+        ignore -> Cs
     end.
 
 default_max_concurrency_cb(_)    -> ok.

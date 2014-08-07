@@ -12,6 +12,7 @@
 
 %% API
 -export([get/3, get/4, put/6, delete/3, head/4, list/5, list_details/5]).
+-export([signed_url/4, signed_url/5]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include("../include/s3.hrl").
@@ -75,6 +76,19 @@ list_details(Config, Bucket, Prefix, MaxKeys, Marker) ->
             Else
     end.
 
+signed_url(Config, Bucket, Key, Expires) ->
+    signed_url(Config, Bucket, Key, get, Expires).
+
+signed_url(Config, Bucket, Key, Method, Expires) ->
+    Signature = sign(Config#config.secret_access_key,
+                     stringToSign(Method, "", integer_to_list(Expires),
+                                  Bucket, Key, "")),
+    Url = build_full_url(Config#config.endpoint, Bucket, Key),
+    SignedUrl = [Url, "?", "AWSAccessKeyId=", Config#config.access_key, "&",
+                 "Expires=", integer_to_list(Expires), "&", "Signature=",
+                 http_uri:encode(binary_to_list(Signature))],
+    lists:flatten(SignedUrl).
+
 
 %%
 %% INTERNAL HELPERS
@@ -134,14 +148,21 @@ do_list(Config, Bucket, Prefix, MaxKeys, Marker) ->
 %%% Internal functions
 %%--------------------------------------------------------------------
 
-
 build_host(Bucket) ->
     [Bucket, ".s3.amazonaws.com"].
+
+build_host(Endpoint, Bucket) ->
+    [Endpoint, "/", Bucket].
 
 build_url(undefined, Bucket, Path) ->
     lists:flatten(["http://", build_host(Bucket), "/", Path]);
 build_url(Endpoint, _Bucket, Path) ->
     lists:flatten(["http://", Endpoint, "/", Path]).
+
+build_full_url(undefined, Bucket, Path) ->
+    lists:flatten(["http://", build_host(Bucket), "/", Path]);
+build_full_url(Endpoint, Bucket, Path) ->
+    lists:flatten(["http://", build_host(Endpoint, Bucket), "/", Path]).
 
 request(Config, Method, Bucket, Path, Headers, Body) ->
     Date = httpd_util:rfc1123_date(),
@@ -205,6 +226,7 @@ is_amz_header(<<"x-amz-", _/binary>>) -> true; %% this is not working.
 is_amz_header("x-amz-"++ _)           -> true;
 is_amz_header(_)                      -> false.
 
+canonicalizedAmzHeaders("") -> "";
 canonicalizedAmzHeaders(AllHeaders) ->
     AmzHeaders = [{string:to_lower(K),V} || {K,V} <- AllHeaders, is_amz_header(K)],
     Strings = lists:map(
@@ -227,6 +249,12 @@ canonicalizedResource(Bucket, Path) ->
             ["/", Bucket, "/", URL]
     end.
 
+stringToSign(Verb, ContentMD5 = "", Date, Bucket = "", Path,
+             OriginalHeaders = "") ->
+    VerbString = string:to_upper(atom_to_list(Verb)),
+    Parts = [VerbString, ContentMD5, "", Date,
+             canonicalizedAmzHeaders(OriginalHeaders)],
+    [s3util:string_join(Parts, "\n"), canonicalizedResource(Bucket, Path)];
 stringToSign(Verb, ContentMD5, Date, Bucket, Path, OriginalHeaders) ->
     VerbString = string:to_upper(atom_to_list(Verb)),
     ContentType = proplists:get_value("Content-Type", OriginalHeaders, ""),

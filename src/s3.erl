@@ -8,6 +8,7 @@
 -export([list/4, list/5, list_details/4, list_details/5]).
 -export([fold/4]).
 -export([stats/0]).
+-export([signed_url/3, signed_url/4, signed_url/5]).
 
 %% alternative API with explicit Pid for s3_server
 -export([pget/3, pget/4]).
@@ -25,6 +26,9 @@
 
 -type bucket() :: string().
 -export_type([bucket/0]).
+
+-type expire() :: pos_integer().
+-export_type([expire/0]).
 
 -type key() :: string().
 -export_type([key/0]).
@@ -99,6 +103,21 @@ fold(Bucket, Prefix, F, Acc) ->
 
 
 stats() -> pstats(s3_server).
+
+
+-spec signed_url(Bucket::bucket(), Key::key(), Expires::expire()) -> list().
+signed_url(Bucket, Key, Expires) ->
+    call(s3_server, {request, {signed_url, Bucket, Key, Expires}}, 5000).
+
+-spec signed_url(Bucket::bucket(), Key::key(), Expires::expire(),
+                 timeout()) -> list().
+signed_url(Bucket, Key, Expires, Timeout) ->
+    call(s3_server, {request, {signed_url, Bucket, Key, Expires}}, Timeout).
+
+-spec signed_url(Bucket::bucket(), Key::key(), Expires::expire(),
+                 Method::atom(), timeout()) -> list().
+signed_url(Bucket, Key, Expires, Method, Timeout) ->
+    call(s3_server, {request, {signed_url, Bucket, Key, Method, Expires}}, Timeout).
 
 
 %%

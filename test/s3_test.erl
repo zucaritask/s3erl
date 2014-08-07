@@ -14,6 +14,8 @@ integration_test_() ->
       ?_test(fold()),
       ?_test(list_objects()),
       ?_test(list_objects_with_details())
+      ?_test(signed_url()),
+      ?_test(reload_config())
      ]}.
 
 setup() ->
@@ -212,6 +214,25 @@ callback_test() ->
 
     s3_server:stop().
 
+signed_url() ->
+    delete_if_existing(bucket(), <<"foo">>),
+    ?assertEqual({ok, not_found}, s3:get(bucket(), <<"foo">>)),
+    {ok, _} = s3:put(bucket(), <<"foo">>, <<"signed_test">>, "text/plain"),
+
+    {MegaSeconds, Seconds, _} = os:timestamp(),
+    Expires = MegaSeconds * 1000000 + Seconds,
+    Url = s3:signed_url(bucket(), <<"foo">>, Expires + 3600),
+
+    ?assertMatch(
+       {ok, {{200, _}, _, <<"signed_test">>}},
+       lhttpc:request(Url, get, [], [], 5000, [])
+      ).
+
+reload_config() ->
+    OldConfig = s3_server:get_config(),
+    s3_server:reload_config([{max_retries, 5} | default_config()]),
+    ?assertNotEqual(OldConfig, s3_server:get_config()).
+
 
 %%
 %% HELPERS
@@ -239,8 +260,12 @@ default_config() ->
 
 credentials() ->
     File = filename:join([code:priv_dir(s3erl), "s3_credentials.term"]),
-    {ok, Cred} = file:consult(File),
-    Cred.
+    case file:consult(File) of
+        {ok, Cred} ->
+            Cred;
+        {error, enoent} ->
+            throw({error, missing_s3_credentials})
+    end.
 
 bucket() ->
     File = filename:join([code:priv_dir(s3erl), "bucket.term"]),
